@@ -10,6 +10,8 @@ export type Composed = {
   confidence: number;
   templateName: string;
   templateParams: string[];
+  composerVersion?: string;
+  contextHash?: string;
   rationale: string;
 };
 
@@ -41,6 +43,16 @@ function yesText(lang: 'en' | 'hi_en_mix') {
 
 export class EngagementComposer {
   compose(category: any, merchant: any, trigger: any, customer: any | null): Composed {
+    // compute a simple stable context hash for audit/replay
+    let contextHash = '';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const crypto = require('crypto');
+      const ctx = JSON.stringify({ category, merchant, trigger, customer });
+      contextHash = crypto.createHash('sha256').update(ctx).digest('hex');
+    } catch (e) {
+      contextHash = '';
+    }
     const categorySlug = category?.slug;
     const merchantName = merchant?.identity?.name ?? 'there';
 
@@ -96,6 +108,8 @@ export class EngagementComposer {
         confidence: 0.85,
         templateName: 'vera_research_digest_v1',
         templateParams: [merchantName, digestItem?.title ?? 'Research digest item', 'Draft a patient WhatsApp', 'Reply YES to receive'],
+        composerVersion: 'composer_v1',
+        contextHash,
         rationale: reason + ' Category voice + merchant specificity (name, category).'
       };
     }
@@ -120,6 +134,8 @@ export class EngagementComposer {
         confidence: 0.7,
         templateName: 'vera_perf_change_v1',
         templateParams: [merchantName, deltaText, offer ?? 'service+price offer', 'Reply YES to draft'],
+        composerVersion: 'composer_v1',
+        contextHash,
         rationale: reason + ' Uses specific metric change + single CTA.'
       };
     }
@@ -134,6 +150,8 @@ export class EngagementComposer {
         decision: 'SEND_MESSAGE', reason: 'Regulatory trigger matched to the supplied category digest item and deadline.',
         body: sanitizeText(body), cta: 'binary_yes_no', sender, suppressionKey, confidence: 0.95,
         templateName: 'vera_compliance_update_v1', templateParams: [merchantName, digestItem?.title ?? 'Compliance update', String(trigger?.payload?.deadline_iso ?? ''), 'Reply YES for checklist'],
+        composerVersion: 'composer_v1',
+        contextHash,
         rationale: 'Uses the supplied regulation headline, deadline, source, and actionable instruction without adding unsupported compliance claims.'
       };
     }
@@ -157,6 +175,8 @@ export class EngagementComposer {
         confidence: 0.9,
         templateName: 'merchant_recall_reminder_v1',
         templateParams: [customerName, merchantName, `Recall due${due ? ` by ${due}` : ''}`, `${slot1 ?? ''} or ${slot2 ?? ''}`, offer ?? 'Offer if applicable'],
+        composerVersion: 'composer_v1',
+        contextHash,
         rationale: 'Uses exact slots from trigger payload, single-purpose booking CTA.'
       };
     }
@@ -176,6 +196,8 @@ export class EngagementComposer {
       confidence: 0.45,
       templateName: 'vera_generic_v1',
       templateParams: [merchantName, trigger.kind, offer ?? 'category-relevant offer', 'Reply YES to draft'],
+      composerVersion: 'composer_v1',
+      contextHash,
       rationale: 'Deterministic fallback strategy anchored on existing merchant/category fields.'
     };
   }
