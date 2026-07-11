@@ -12,9 +12,15 @@ export class ContextStore {
   upsert(scope: string, context_id: string, version: number, payload: Record<string, any>, delivered_at: string) {
     const k = this.key(scope, context_id);
     const cur = this.map.get(k);
-    if (cur && cur.version >= version) {
+    // If we already have a newer version, reject as stale.
+    if (cur && cur.version > version) {
       return { accepted: false, reason: 'stale_version', current_version: cur.version };
     }
+    // If same version is posted again, treat as idempotent (no-op, accepted).
+    if (cur && cur.version === version) {
+      return { accepted: true, ack_id: `ack_${context_id}_v${version}`, stored_at: cur.delivered_at || new Date().toISOString() };
+    }
+    // Otherwise store the new version.
     this.map.set(k, { version, payload, delivered_at });
     return { accepted: true, ack_id: `ack_${context_id}_v${version}`, stored_at: new Date().toISOString() };
   }
