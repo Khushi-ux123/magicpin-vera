@@ -29,12 +29,12 @@ app.get('/v1/readiness', (_req, res) => {
 });
 
 app.get('/v1/metadata', (_req, res) => res.status(200).json({
-  team_name: 'BlackboxAI',
-  team_members: ['BlackboxAI'],
+  team_name: 'Khushi Sharma',
+  team_members: ['Khushi Sharma'],
   model: 'deterministic-rule-based',
-  approach: 'Clean Architecture deterministic composer (no hallucinations) + stateful suppression + conversation intelligence',
-  contact_email: 'noreply@example.com',
-  version: '0.0.1',
+  approach: 'Deterministic AI merchant engagement engine using category, merchant, trigger, and customer context with clean architecture, suppression logic, and explainable decision making.',
+  contact_email: 'khushi905sharma@gmail.com',
+  version: '1.0.0',
   submitted_at: new Date().toISOString()
 }));
 
