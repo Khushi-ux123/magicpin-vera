@@ -282,11 +282,29 @@ export class ReplyService {
 
     // Merchant YES / OK / Sounds good => deliver requested business asset (no qualification question).
     if (role === 'merchant' && detectMerchantYes(lower)) {
-      const asset = requestedAsset ?? 'a patient communication draft';
       const cat = merchantCategorySlug ?? 'category';
       const kind = triggerKind ?? 'your active update';
+
+      // If merchant explicitly asked for an “abstract”, respond with an abstract-style message.
+      if (lower.includes('abstract')) {
+        const abstractBody = `Here’s a concise abstract-style draft aligned to your ${kind} (${cat}):\n\nTitle: Patient-focused clinical update—key takeaway + action\n\n1) Background: What this addresses for patients\n2) Evidence/Insight: One-line why it matters (no overclaim)\n3) Relevance: How it connects to your offer / recall intent\n4) Next Step: Invite the patient to book / respond (low friction)\n\nWant me to tailor it for WhatsApp length or email length? (Reply STOP to pause)`;
+
+        return {
+          action: 'send',
+          body: enforceMaxChars(abstractBody),
+          cta: 'open_ended',
+          rationale: 'Merchant confirmation received; merchant requested an abstract, so returned an abstract-style draft.'
+        };
+      }
+
+      const asset = requestedAsset ?? 'a patient communication draft';
       const merchantReply = `For ${kind} in ${cat}, here is the ${asset} you requested. Reply STOP to pause.`;
-      return { action: 'send', body: enforceMaxChars(merchantReply), cta: 'open_ended', rationale: 'Merchant confirmation received; delivered the requested asset immediately.' };
+      return {
+        action: 'send',
+        body: enforceMaxChars(merchantReply),
+        cta: 'open_ended',
+        rationale: 'Merchant confirmation received; delivered the requested asset immediately.'
+      };
     }
 
     // Merchant unrelated / off-topic.
