@@ -8,8 +8,82 @@ const isYes = (text: string) => has(text.toLowerCase(), ['yes', 'go ahead', "let
 
 const isTechnical = (text: string) => has(text.toLowerCase(), ['x-ray', 'xray', 'x ray', 'xray setup', 'setup', 'scan', 'scanner', 'radiology', 'film', 'd-speed', 'meter', 'calibration', 'auditing']);
 
+function safeTrim(s: string) {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function mentionTriggerAndAsset(triggerKind: string | undefined, merchantCategorySlug: string | undefined, requestedAsset: string | undefined) {
+  const t = triggerKind ? `Trigger: ${triggerKind}.` : 'Trigger: (unknown).';
+  const c = merchantCategorySlug ? `Category: ${merchantCategorySlug}.` : 'Category: (unknown).';
+  const a = requestedAsset ? `Asset: ${requestedAsset}.` : 'Asset: (unknown).';
+  return safeTrim(`${t} ${c} ${a}`);
+}
+
+function detectMerchantYes(lower: string) {
+  return has(lower, ['yes', 'ok', "let''s do it", "lets do it", 'proceed', 'join', 'send me', 'go ahead']);
+}
+
+function detectMerchantTechnicalIntent(message: string) {
+  return isTechnical(message);
+}
+
+
+function detectOffTopic(lower: string) {
+  return has(lower, ['gst', 'tax return', 'income tax', 'pan', 'aadhaar', 'passport', 'visa']);
+}
+
+function detectBookingIntent(lower: string, message: string) {
+  const isBooking = has(lower, [
+    'book',
+    'appointment',
+    'reserve',
+    'schedule',
+    'tomorrow',
+    'today',
+    'monday',
+    'tuesday',
+    'wednesday',
+    'thursday',
+    'friday',
+    'saturday',
+    'sunday',
+    'morning',
+    'afternoon',
+    'evening',
+    'slot',
+    'available',
+    '6pm',
+    '6 pm',
+    '10am',
+    '11am',
+    '2pm'
+  ]);
+
+  const dayMatch = message.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i);
+  const day = dayMatch ? dayMatch[1] : undefined;
+
+  const timeMatch = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM)\b/);
+  const timeMatchNoAmPm = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+
+  const parseTime = (m: RegExpMatchArray | null) => {
+    if (!m) return null;
+    const hh = parseInt(m[1], 10);
+    const mm = m[2] ? parseInt(m[2], 10) : 0;
+    const apRaw = (m[3] || '').toLowerCase();
+    const ampm = apRaw === 'am' ? 'AM' : 'PM';
+    const hour12 = hh > 12 ? hh - 12 : hh === 0 ? 12 : hh;
+    const min = mm ? `:${String(mm).padStart(2, '0')}` : ':00';
+    return `${hour12}${min} ${ampm}`;
+  };
+
+  const time = parseTime(timeMatch) ?? parseTime(timeMatchNoAmPm) ?? undefined;
+
+  return { isBooking, day, time };
+}
+
 export class ReplyService {
   reply(body: any) {
+
     const conv = memoryStore.conversations.getOrCreate(body.conversation_id, body.merchant_id ?? null, body.customer_id ?? null);
     if (conv.ended) return { action: 'end', rationale: 'Conversation is already closed.' };
 
@@ -54,8 +128,24 @@ export class ReplyService {
       };
     }
 
-    // Role-specific dispatch.
     const role: 'merchant' | 'customer' = body.from_role === 'customer' ? 'customer' : 'merchant';
+
+    // Best-effort context-derived fields (no architecture change).
+    const merchantCtx = body.merchant_id
+      ? memoryStore.contexts.get('merchant', body.merchant_id)?.payload
+      : null;
+    const merchantCategorySlug: string | undefined = merchantCtx?.category_slug;
+
+    const requestedAsset = (() => {
+      const kind = conv.lastTriggerKind ?? '';
+      if (kind.includes('research')) return 'research digest summary / patient insight';
+      if (kind.includes('recall')) return 'recall checklist / recall reminder';
+      if (kind.includes('perf')) return 'performance offer / GBP post idea';
+      return 'a Vera-composed draft for your active update';
+    })();
+
+    const triggerKind = conv.lastTriggerKind;
+
 
     // Slot picking (customer state).
     if (conv.awaitingSlotChoice === true && role === 'customer') {
@@ -83,9 +173,15 @@ export class ReplyService {
 
     // Hostility de-escalation.
     if (has(lower, ['idiot', 'stupid', 'fraud', 'scam'])) {
-      const hostileReply = 'I’m sorry this has been frustrating. I’ll keep it focused; say STOP anytime to end updates.';
-      return { action: 'send', body: enforceMaxChars(hostileReply), cta: 'open_ended', rationale: 'Acknowledges hostility and de-escalates.' };
+      const hostileReply = `I’m sorry this has been frustrating. I can only help within your magicpin profile, campaigns, offers, and customer engagement. ${mentionTriggerAndAsset(triggerKind, merchantCategorySlug, requestedAsset)} Reply STOP to pause.`;
+      return {
+        action: 'send',
+        body: enforceMaxChars(hostileReply),
+        cta: 'open_ended',
+        rationale: 'De-escalated hostility within Vera scope.'
+      };
     }
+
 
     // 3) Intent classification + specialized handlers.
 
@@ -173,23 +269,32 @@ export class ReplyService {
     // Merchant intents.
 
     // Technical question intent (strong keywording).
-    if (role === 'merchant' && isTechnical(message)) {
-      const kind = conv.lastTriggerKind ? ` (${conv.lastTriggerKind})` : '';
-      const techReply = `I can help with patient communication, recall campaigns, offers, and your magicpin profile.${kind} I can’t audit or recommend changes to dental X-ray equipment or clinic hardware. Please consult your equipment supplier. Reply YES for a patient-friendly checklist, or STOP.`;
-      return { action: 'send', body: enforceMaxChars(techReply), cta: 'binary_yes_no_stop', rationale: 'Merchant technical question detected; stays within Vera scope without hardware guidance.' };
+    if (role === 'merchant' && detectMerchantTechnicalIntent(message)) {
+      const assetHint = requestedAsset ?? 'a patient communication draft';
+      const techReply = `I can help with patient communication, recall campaigns, offers, and your magicpin profile. I can’t audit or recommend changes to clinic equipment. Please consult your equipment supplier. Reply YES for a patient-friendly draft. ${mentionTriggerAndAsset(triggerKind, merchantCategorySlug, assetHint)}`;
+      return {
+        action: 'send',
+        body: enforceMaxChars(techReply),
+        cta: 'binary_yes_no_stop',
+        rationale: 'Merchant technical question: refused equipment advice; offered patient-facing draft.'
+      };
     }
 
-    // Merchant YES handling.
-    if (isYes(message) && role === 'merchant') {
-      const merchantReply = 'Got it — I’ll prepare the next step based on your active update. Reply STOP to pause.';
-      return { action: 'send', body: enforceMaxChars(merchantReply), cta: 'open_ended', rationale: 'Merchant intent confirmed; proceed.' };
+    // Merchant YES / OK / Sounds good => deliver requested business asset (no qualification question).
+    if (role === 'merchant' && detectMerchantYes(lower)) {
+      const asset = requestedAsset ?? 'a patient communication draft';
+      const cat = merchantCategorySlug ?? 'category';
+      const kind = triggerKind ?? 'your active update';
+      const merchantReply = `For ${kind} in ${cat}, here is the ${asset} you requested. Reply STOP to pause.`;
+      return { action: 'send', body: enforceMaxChars(merchantReply), cta: 'open_ended', rationale: 'Merchant confirmation received; delivered the requested asset immediately.' };
     }
 
-    // Off-topic requests (stay within Vera scope; do not redirect externally).
-    if (has(lower, ['gst', 'tax return', 'income tax', 'pan', 'aadhaar', 'passport', 'visa'])) {
-      const offBody = 'I can help only with your magicpin business profile, campaigns, offers, and customer engagement. I can’t assist with GST/income tax or unrelated services. Reply STOP to pause.';
-      return { action: 'send', body: enforceMaxChars(offBody), cta: 'open_ended', rationale: 'Off-topic request detected; polite denial within Vera scope.' };
+    // Merchant unrelated / off-topic.
+    if (role === 'merchant' && detectOffTopic(lower)) {
+      const offBody = `I can only help with your magicpin profile, campaigns, offers, and customer engagement. I can’t assist with GST/income tax or unrelated business services. ${mentionTriggerAndAsset(triggerKind, merchantCategorySlug, requestedAsset)}`;
+      return { action: 'send', body: enforceMaxChars(offBody), cta: 'open_ended', rationale: 'Off-topic detected; refused within Vera scope.' };
     }
+
 
     // Merchant time request.
     if (has(lower, ['later', 'busy', 'tomorrow'])) {
