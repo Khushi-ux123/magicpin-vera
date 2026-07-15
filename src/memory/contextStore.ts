@@ -5,6 +5,18 @@ export type StoredContext = { version: number; payload: Record<string, any>; del
 export class ContextStore {
   private map = new Map<Key, StoredContext>();
 
+  // Debug-only helpers (do not affect business logic)
+  debugKeysForScope(scope: string) {
+    return Array.from(this.map.keys())
+      .filter((k) => k.startsWith(`${scope}:`))
+      .map((k) => k.slice(scope.length + 1));
+  }
+
+  debugAllKeys() {
+    return Array.from(this.map.keys());
+  }
+
+
   private key(scope: string, context_id: string) {
     return `${scope}:${context_id}`;
   }
