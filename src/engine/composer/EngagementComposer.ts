@@ -1,4 +1,5 @@
-﻿import { sanitizeText } from '../../utils/sanitizeText';
+﻿import { enforceMaxChars, sanitizeText } from '../../utils/sanitizeText';
+
 
 export type Composed = {
   decision: 'SEND_MESSAGE' | 'WAIT' | 'NO_ACTION';
@@ -43,6 +44,7 @@ function yesText(lang: 'en' | 'hi_en_mix') {
 
 export class EngagementComposer {
   compose(category: any, merchant: any, trigger: any, customer: any | null): Composed {
+
     // compute a simple stable context hash for audit/replay
     let contextHash = '';
     try {
@@ -101,7 +103,8 @@ export class EngagementComposer {
       return {
         decision: 'SEND_MESSAGE',
         reason,
-        body: cleaned,
+        body: enforceMaxChars(cleaned),
+
         cta: 'binary_yes_no',
         sender,
         suppressionKey,
@@ -127,7 +130,7 @@ export class EngagementComposer {
       return {
         decision: 'SEND_MESSAGE',
         reason,
-        body: sanitizeText(body),
+        body: enforceMaxChars(sanitizeText(body)),
         cta: 'binary_yes_no',
         sender,
         suppressionKey,
@@ -148,7 +151,7 @@ export class EngagementComposer {
       const body = `${merchantName}, compliance update: ${digestItem?.title ?? 'a regulatory change'}${deadline}${action} Want a concise audit checklist? Reply YES or STOP.${source}`;
       return {
         decision: 'SEND_MESSAGE', reason: 'Regulatory trigger matched to the supplied category digest item and deadline.',
-        body: sanitizeText(body), cta: 'binary_yes_no', sender, suppressionKey, confidence: 0.95,
+        body: enforceMaxChars(sanitizeText(body)), cta: 'binary_yes_no', sender, suppressionKey, confidence: 0.95,
         templateName: 'vera_compliance_update_v1', templateParams: [merchantName, digestItem?.title ?? 'Compliance update', String(trigger?.payload?.deadline_iso ?? ''), 'Reply YES for checklist'],
         composerVersion: 'composer_v1',
         contextHash,
@@ -168,7 +171,7 @@ export class EngagementComposer {
       return {
         decision: 'SEND_MESSAGE',
         reason: `Customer-scoped recall reminder (${serviceDue}) with available slots in trigger payload.`,
-        body: sanitizeText(body),
+        body: enforceMaxChars(sanitizeText(body)),
         cta: 'multi_choice_slot',
         sender: 'merchant_on_behalf',
         suppressionKey,
@@ -189,7 +192,7 @@ export class EngagementComposer {
     return {
       decision: 'SEND_MESSAGE',
       reason: `Trigger ${trigger.kind} is active and we can compose using available merchant/category info without hallucination.`,
-      body: sanitizeText(body),
+      body: enforceMaxChars(sanitizeText(body)),
       cta: 'binary_yes_no',
       sender,
       suppressionKey,

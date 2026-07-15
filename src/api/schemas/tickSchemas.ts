@@ -5,3 +5,4 @@ export const tickSchema = z.object({
   available_triggers: z.array(z.string())
 });
 
+

@@ -14,8 +14,17 @@ export type ConversationState = {
   ended?: boolean;
   autoReplyCount?: number;
   optOut?: boolean;
+
+  // CTA / reply-state tracking to enable slot parsing & YES/STOP routing.
+  lastCtaType?: string;
+  lastTriggerKind?: string;
+  awaitingSlotChoice?: boolean;
+  lastSlot1Label?: string;
+  lastSlot2Label?: string;
+
   turns: ConversationTurn[];
 };
+
 
 export class ConversationStore {
   private map = new Map<string, ConversationState>();

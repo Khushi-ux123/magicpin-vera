@@ -41,8 +41,20 @@ export class TickService {
         body: composed.body,
         cta: composed.cta,
         suppression_key: composed.suppressionKey,
-        rationale: composed.rationale
+        rationale: composed.rationale,
+        // State hints for /v1/reply routing (used by ReplyService).
+        state_hint: {
+          cta_type: composed.cta,
+          trigger_kind: trigger.kind,
+          slot1_label: trigger?.payload?.available_slots?.[0]?.label,
+          slot2_label: trigger?.payload?.available_slots?.[1]?.label,
+          awaitingSlotChoice: composed.cta === 'multi_choice_slot'
+        },
+        // Convenience flattened for ReplyService.
+        awaiting_slot_choice: composed.cta === 'multi_choice_slot'
+
       });
+
     }
     void nowIso;
     return { actions };
