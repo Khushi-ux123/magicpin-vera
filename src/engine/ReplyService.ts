@@ -85,12 +85,27 @@ export class ReplyService {
   reply(body: any) {
 
     const conv = memoryStore.conversations.getOrCreate(body.conversation_id, body.merchant_id ?? null, body.customer_id ?? null);
-    if (conv.ended) return { action: 'end', rationale: 'Conversation is already closed.' };
-
-    conv.turns.push({ turn_number: body.turn_number, from_role: body.from_role, message: body.message, received_at: body.received_at });
 
     const message = String(body.message ?? '');
     const lower = message.toLowerCase();
+
+    // Allow restarting a previously-ended conversation on the same conversation_id.
+    // This is triggered only when the sender explicitly asks to start/resume.
+    const isRestartIntent = has(lower, ['start', 'resume', 'restart', 'continue', 'new chat', 'begin']);
+
+    if (conv.ended) {
+      if (isRestartIntent) {
+        conv.ended = false;
+        conv.optOut = false;
+        conv.autoReplyCount = 0;
+        // Keep turns for auditability; just re-enable the flow.
+      } else {
+        return { action: 'end', rationale: 'Conversation is already closed.' };
+      }
+    }
+
+    conv.turns.push({ turn_number: body.turn_number, from_role: body.from_role, message: body.message, received_at: body.received_at });
+
 
     // Required logic order for judge:
     // 1) STOP/unsubscribe
