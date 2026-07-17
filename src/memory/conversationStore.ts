@@ -22,8 +22,18 @@ export type ConversationState = {
   lastSlot1Label?: string;
   lastSlot2Label?: string;
 
+  // Optional reschedule date/time hint emitted by TickService/composer and echoed in ReplyService.
+  rescheduleAtHint?: string;
+
+
+  // When merchant asked for multi-choice slot, we store that state here.
+  // TickService emits `awaiting_slot_choice` in its action response; ReplyService should
+  // persist it so customer replies can be interpreted correctly.
+  lastAwaitingSlotChoiceHint?: boolean;
+
   turns: ConversationTurn[];
 };
+
 
 
 export class ConversationStore {
