@@ -2,95 +2,55 @@
 import { enforceMaxChars } from '../utils/sanitizeText';
 
 const has = (text: string, words: string[]) => words.some((word) => text.includes(word));
-const isAuto = (text: string) => has(text.toLowerCase(), ['thank you for contacting', 'our team will respond', 'automated assistant', 'auto-reply']);
-const isStop = (text: string) => has(text.toLowerCase(), ['stop', 'unsubscribe', 'not interested', 'do not contact', 'useless spam']);
-const isYes = (text: string) => has(text.toLowerCase(), ['yes', 'go ahead', "let''s do it", 'lets do it', 'ok lets do it', 'proceed', 'join', 'send me']);
-
-const isTechnical = (text: string) => has(text.toLowerCase(), ['x-ray', 'xray', 'x ray', 'xray setup', 'setup', 'scan', 'scanner', 'radiology', 'film', 'd-speed', 'meter', 'calibration', 'auditing']);
+const isAuto = (text: string) =>
+  has(text.toLowerCase(), ['thank you for contacting', 'our team will respond', 'automated assistant', 'auto-reply']);
+const isStop = (text: string) =>
+  has(text.toLowerCase(), ['stop', 'unsubscribe', 'not interested', 'do not contact', 'useless spam']);
 
 function safeTrim(s: string) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-function mentionTriggerAndAsset(triggerKind: string | undefined, merchantCategorySlug: string | undefined, requestedAsset: string | undefined) {
-  const t = triggerKind ? `Trigger: ${triggerKind}.` : 'Trigger: (unknown).';
-  const c = merchantCategorySlug ? `Category: ${merchantCategorySlug}.` : 'Category: (unknown).';
-  const a = requestedAsset ? `Asset: ${requestedAsset}.` : 'Asset: (unknown).';
-  return safeTrim(`${t} ${c} ${a}`);
+function mentionTriggerAndCategory(triggerKind: string | undefined, merchantCategorySlug: string | undefined) {
+  const parts: string[] = [];
+  if (triggerKind) parts.push(triggerKind);
+  if (merchantCategorySlug) parts.push(merchantCategorySlug);
+  return parts.length ? safeTrim(parts.join(' • ')) : '';
 }
 
 function detectMerchantYes(lower: string) {
   return has(lower, ['yes', 'ok', "let''s do it", "lets do it", 'proceed', 'join', 'send me', 'go ahead']);
 }
 
-function detectMerchantTechnicalIntent(message: string) {
-  return isTechnical(message);
+function isTechnicalIntent(message: string) {
+  return has(message.toLowerCase(), [
+    'x-ray',
+    'xray',
+    'x ray',
+    'xray setup',
+    'setup',
+    'scan',
+    'scanner',
+    'radiology',
+    'film',
+    'd-speed',
+    'meter',
+    'calibration',
+    'auditing'
+  ]);
 }
-
 
 function detectOffTopic(lower: string) {
   return has(lower, ['gst', 'tax return', 'income tax', 'pan', 'aadhaar', 'passport', 'visa']);
 }
 
-function detectBookingIntent(lower: string, message: string) {
-  const isBooking = has(lower, [
-    'book',
-    'appointment',
-    'reserve',
-    'schedule',
-    'tomorrow',
-    'today',
-    'monday',
-    'tuesday',
-    'wednesday',
-    'thursday',
-    'friday',
-    'saturday',
-    'sunday',
-    'morning',
-    'afternoon',
-    'evening',
-    'slot',
-    'available',
-    '6pm',
-    '6 pm',
-    '10am',
-    '11am',
-    '2pm'
-  ]);
-
-  const dayMatch = message.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i);
-  const day = dayMatch ? dayMatch[1] : undefined;
-
-  const timeMatch = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM)\b/);
-  const timeMatchNoAmPm = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
-
-  const parseTime = (m: RegExpMatchArray | null) => {
-    if (!m) return null;
-    const hh = parseInt(m[1], 10);
-    const mm = m[2] ? parseInt(m[2], 10) : 0;
-    const apRaw = (m[3] || '').toLowerCase();
-    const ampm = apRaw === 'am' ? 'AM' : 'PM';
-    const hour12 = hh > 12 ? hh - 12 : hh === 0 ? 12 : hh;
-    const min = mm ? `:${String(mm).padStart(2, '0')}` : ':00';
-    return `${hour12}${min} ${ampm}`;
-  };
-
-  const time = parseTime(timeMatch) ?? parseTime(timeMatchNoAmPm) ?? undefined;
-
-  return { isBooking, day, time };
-}
-
 export class ReplyService {
   reply(body: any) {
-
     const conv = memoryStore.conversations.getOrCreate(body.conversation_id, body.merchant_id ?? null, body.customer_id ?? null);
 
     const message = String(body.message ?? '');
     const lower = message.toLowerCase();
 
-    // Allow restarting a previously-ended conversation on the same conversation_id.
-    // This is triggered only when the sender explicitly asks to start/resume.
     const isRestartIntent = has(lower, ['start', 'resume', 'restart', 'continue', 'new chat', 'begin']);
 
     if (conv.ended) {
@@ -98,7 +58,6 @@ export class ReplyService {
         conv.ended = false;
         conv.optOut = false;
         conv.autoReplyCount = 0;
-        // Keep turns for auditability; just re-enable the flow.
       } else {
         return { action: 'end', rationale: 'Conversation is already closed.' };
       }
@@ -106,61 +65,101 @@ export class ReplyService {
 
     conv.turns.push({ turn_number: body.turn_number, from_role: body.from_role, message: body.message, received_at: body.received_at });
 
-
-    // Required logic order for judge:
-    // 1) STOP/unsubscribe
-    // 2) auto-reply detection
-    // 3) role-aware intent classification
-
-    // 1) STOP / end-on-request detection.
     if (isStop(message)) {
       conv.ended = true;
       conv.optOut = true;
       return { action: 'end', rationale: 'The recipient explicitly opted out (STOP), so no further messages will be sent.' };
     }
 
-    // 2) Auto-reply backoff (cross-conversation repetition).
     if (isAuto(message)) {
       const normalized = message.trim().toLowerCase();
       const crossKey = `auto_${conv.merchant_id ?? 'm_unknown'}_${normalized}`;
 
-      const existing = conv.autoReplyCount ?? 0;
+      const prev = conv.autoReplyCount ?? 0;
       const prevSent = memoryStore.suppression.shouldSuppress(crossKey, 365 * 24 * 60 * 60 * 1000);
-      const repeats = existing + (prevSent ? 1 : 0);
+      const repeats = prev + (prevSent ? 1 : 0);
 
-      if (repeats >= 3) {
+      if (repeats >= 2) {
         conv.ended = true;
-        return { action: 'end', rationale: 'The same WhatsApp Business auto-reply repeated three times with no owner engagement.' };
+        return { action: 'end', rationale: 'Auto Reply #3 detected — END conversation.' };
       }
 
       conv.autoReplyCount = repeats;
       memoryStore.suppression.markSent(crossKey);
 
-      return {
-        action: 'wait',
-        wait_seconds: repeats === 1 ? 14400 : 86400,
-        rationale: 'Likely WhatsApp Business auto-reply; backing off for an owner response.'
-      };
+      return { action: 'wait', wait_seconds: 14400, rationale: repeats === 0 ? 'Auto Reply #1 detected — WAIT 4 hours.' : 'Auto Reply #2 detected — WAIT 4 hours.' };
     }
 
     const role: 'merchant' | 'customer' = body.from_role === 'customer' ? 'customer' : 'merchant';
 
-    // Best-effort context-derived fields (no architecture change).
-    const merchantCtx = body.merchant_id
-      ? memoryStore.contexts.get('merchant', body.merchant_id)?.payload
-      : null;
-    const merchantCategorySlug: string | undefined = merchantCtx?.category_slug;
+    const parseIdsFromConversationId = (conversationId: string) => {
+      const parts = String(conversationId).split('_');
+      if (parts.length < 3) return { merchantId: undefined, triggerId: undefined };
+      const merchantId = parts.slice(1, 2).join('_') || undefined;
+      const triggerId = parts.slice(2).join('_') || undefined;
+      return { merchantId, triggerId };
+    };
 
-    const requestedAsset = (() => {
-      const kind = conv.lastTriggerKind ?? '';
-      if (kind.includes('research')) return 'research digest summary / patient insight';
-      if (kind.includes('recall')) return 'recall checklist / recall reminder';
-      if (kind.includes('perf')) return 'performance offer / GBP post idea';
-      return 'a Vera-composed draft for your active update';
+    const { merchantId: inferredMerchantId, triggerId: inferredTriggerId } = parseIdsFromConversationId(body.conversation_id);
+
+    const merchantId = body.merchant_id ?? inferredMerchantId ?? null;
+    const triggerId = body.trigger_id ?? inferredTriggerId ?? null;
+
+    const triggerPayload: any | null = triggerId ? memoryStore.contexts.get('trigger', triggerId)?.payload ?? null : null;
+    const merchantPayload: any | null = merchantId ? memoryStore.contexts.get('merchant', merchantId)?.payload ?? null : null;
+
+    const normalizePossiblyUnknown = (v: any): string | undefined => {
+      if (v === undefined || v === null) return undefined;
+      const s = String(v).trim();
+      if (!s) return undefined;
+      if (s.toLowerCase() === 'unknown' || s === '(unknown)') return undefined;
+      return s;
+    };
+
+    const categorySlug: string | undefined = normalizePossiblyUnknown(merchantPayload?.category_slug);
+    const categoryPayload: any | null = categorySlug ? memoryStore.contexts.get('category', categorySlug)?.payload ?? null : null;
+    const merchantCategorySlug: string | undefined = categorySlug;
+
+    const triggerKindFromPayload = normalizePossiblyUnknown(triggerPayload?.kind as string | undefined);
+    const triggerKind = triggerKindFromPayload ?? normalizePossiblyUnknown(conv.lastTriggerKind);
+
+    const requestedPatientOrPost = (() => {
+      const k = (triggerKind ?? '').toLowerCase();
+
+      const merchantName: string | null = merchantPayload?.identity?.name ?? merchantPayload?.name ?? null;
+
+      const offerText: string | null =
+        (Array.isArray(merchantPayload?.offers)
+          ? merchantPayload.offers.find((o: any) => o?.status === 'active' && typeof o?.title === 'string')?.title
+          : null) ??
+        (Array.isArray(categoryPayload?.offer_catalog) ? categoryPayload.offer_catalog?.[0]?.title : null) ??
+        null;
+
+      const prefix = merchantName ? `${merchantName} recommends:` : 'Patient communication draft:';
+
+      if (k === 'research_digest' || k === 'research_digest_release' || k.includes('research')) {
+        return `${prefix} Regular preventive dental visits help detect problems early and keep your smile healthy. If it’s time for your next check-up, contact us to schedule an appointment.`;
+      }
+
+      if (k === 'recall_due' || k.includes('recall')) {
+        return `${prefix} It’s time for your routine dental check-up. Regular preventive visits help maintain healthy teeth and gums. Contact us to book your preferred appointment.`;
+      }
+
+      if (k.includes('performance') || k.includes('perf') || k.includes('seasonal_perf_dip')) {
+        const offerPart = offerText ? `Book “${offerText}” today and stay ahead of oral health issues.` : 'Book your next dental visit and stay ahead of oral health issues.';
+        return `Google Business Profile post: Healthy smiles start with preventive care. ${offerPart}`;
+      }
+
+      if (k.includes('seasonal')) {
+        return `${prefix} Seasonal weather can increase the risk of oral infections. A preventive dental check-up helps keep your smile healthy. Contact us to schedule your visit.`;
+      }
+
+      if (k.includes('regulation')) {
+        return 'Summary: A new compliance update has been released. Review your current workflow and ensure your patient communication follows the latest guidance.';
+      }
+
+      return `${prefix} Preventive dental visits help catch issues early and keep treatment simple. Contact us to schedule your next appointment.`;
     })();
-
-    const triggerKind = conv.lastTriggerKind;
-
 
     // Slot picking (customer state).
     if (conv.awaitingSlotChoice === true && role === 'customer') {
@@ -173,171 +172,45 @@ export class ReplyService {
         conv.awaitingSlotChoice = false;
 
         const chosenText = slotLabel ? ` ${slotLabel}` : '';
-        const replyBody = `Done — slot ${chosen} selected.${chosenText} Reply STOP anytime to pause.`;
-        return {
-          action: 'send',
-          body: enforceMaxChars(replyBody),
-          cta: 'open_ended',
-          rationale: 'Customer picked a valid slot (1/2) while waiting for slot choice.'
-        };
+        const replyBody = `Done — slot ${chosen} selected.${chosenText}`;
+        return { action: 'send', body: enforceMaxChars(replyBody), cta: 'open_ended', rationale: 'Customer picked a valid slot (1/2) while waiting for slot choice.' };
       }
 
-      const clarify = 'Please reply “1” or “2” to pick the slot you want. (STOP to pause)';
-      return { action: 'send', body: enforceMaxChars(clarify), cta: 'open_ended', rationale: 'Awaiting explicit slot choice (1/2).'};
+      const clarify = 'Please reply “1” or “2” to pick the slot you want.';
+      return { action: 'send', body: enforceMaxChars(clarify), cta: 'open_ended', rationale: 'Awaiting explicit slot choice (1/2).' };
     }
 
-    // Hostility de-escalation.
-    if (has(lower, ['idiot', 'stupid', 'fraud', 'scam'])) {
-      const hostileReply = `I’m sorry this has been frustrating. I can only help within your magicpin profile, campaigns, offers, and customer engagement. ${mentionTriggerAndAsset(triggerKind, merchantCategorySlug, requestedAsset)} Reply STOP to pause.`;
+    if (role === 'merchant' && isTechnicalIntent(message)) {
       return {
         action: 'send',
-        body: enforceMaxChars(hostileReply),
+        body: enforceMaxChars(
+          `I can help with patient communication, recall campaigns, offers, and customer engagement. I can’t advise on clinic equipment. Please consult your equipment supplier.`
+        ),
         cta: 'open_ended',
-        rationale: 'De-escalated hostility within Vera scope.'
+        rationale: 'Merchant technical question: refused equipment advice; will provide patient communication content instead.'
       };
     }
 
-
-    // 3) Intent classification + specialized handlers.
-
-    // Customer intents (booking/cancel/reschedule/complaint/etc) must run BEFORE generic continuation.
-    if (role === 'customer') {
-      // Booking intent detection.
-      const isBooking = has(lower, [
-        'book', 'appointment', 'reserve', 'schedule',
-        'tomorrow', 'today',
-        'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-        '10am', '11am', '2pm', '6pm',
-        'morning', 'afternoon', 'evening',
-        'slot', 'available'
-      ]);
-
-      // Cancellation / reschedule.
-      const isCancel = has(lower, ['cancel', 'cancellation']);
-      const isReschedule = has(lower, ['reschedule', 'change time', 'reschedule it']);
-      const isComplaint = has(lower, ['complaint', 'not happy', 'unhappy', 'bad service', 'rude']);
-      const isGreeting = has(lower, ['hi', 'hello', 'hey']);
-      const isQuestion = lower.includes('?') || has(lower, ['what', 'when', 'how', 'can you', 'could you']);
-
-      if (isBooking) {
-        // Extract a day token.
-        const dayMatch = message.match(/\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i);
-
-        // Extract a time token like "6pm", "6 pm", "6:30pm" (am/pm preferred but optional).
-        const timeMatch = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM)\b/);
-        const timeMatchNoAmPm = message.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
-
-        const day = dayMatch ? dayMatch[1] : 'Wednesday';
-        let timeStr = '6:00 PM';
-
-        const parseTime = (m: RegExpMatchArray | null) => {
-          if (!m) return null;
-          const hh = parseInt(m[1], 10);
-          const mm = m[2] ? parseInt(m[2], 10) : 0;
-          const apRaw = (m[3] || '').toLowerCase();
-
-          // If am/pm is missing, default to PM (booking messages in the judge are evening-oriented).
-          const ampm = apRaw === 'am' ? 'AM' : 'PM';
-          const hour12 = hh > 12 ? (hh - 12) : (hh === 0 ? 12 : hh);
-          const min = mm ? `:${String(mm).padStart(2, '0')}` : ':00';
-          return `${hour12}${min} ${ampm}`;
-        };
-
-        const parsed = parseTime(timeMatch) ?? parseTime(timeMatchNoAmPm);
-        if (parsed) timeStr = parsed;
-
-
-        const bookingBody = `I've captured your appointment request.\nRequested time:\n• ${day}\n• ${timeStr}\nThe clinic will confirm availability shortly.`;
-        return { action: 'send', body: enforceMaxChars(bookingBody), cta: 'open_ended', rationale: 'Customer booking intent detected; captured request without claiming confirmation.' };
-      }
-
-      if (isCancel) {
-        const cancelBody = 'I’ve noted your cancellation request. Please share your preferred cancellation date/time so the clinic can confirm.';
-        return { action: 'send', body: enforceMaxChars(cancelBody), cta: 'open_ended', rationale: 'Customer cancellation intent detected.' };
-      }
-
-      if (isReschedule) {
-        const resBody = 'I’ve noted your reschedule request. Please share the new preferred date/time so the clinic can confirm availability.';
-        return { action: 'send', body: enforceMaxChars(resBody), cta: 'open_ended', rationale: 'Customer reschedule intent detected.' };
-      }
-
-      if (isComplaint) {
-        const cBody = 'I’m sorry about that. I’ve recorded your concern—please tell me what happened briefly so the clinic can help.';
-        return { action: 'send', body: enforceMaxChars(cBody), cta: 'open_ended', rationale: 'Customer complaint intent detected.' };
-      }
-
-      if (isGreeting) {
-        const gBody = 'Hi! How can I help with your appointment request today? (Reply STOP to pause)';
-        return { action: 'send', body: enforceMaxChars(gBody), cta: 'open_ended', rationale: 'Customer greeting intent detected.' };
-      }
-
-      if (isQuestion) {
-        const qBody = 'Thanks for asking—what date/time are you looking for? I’ll forward it to the clinic. (STOP to pause)';
-        return { action: 'send', body: enforceMaxChars(qBody), cta: 'open_ended', rationale: 'Customer question intent detected.' };
-      }
-
-      // Unknown customer intent.
-      const unkBody = 'Got it. Please share what you need (date/time if it’s about an appointment). Reply STOP to pause.';
-      return { action: 'send', body: enforceMaxChars(unkBody), cta: 'open_ended', rationale: 'Customer intent unknown; safe clarification.' };
-    }
-
-    // Merchant intents.
-
-    // Technical question intent (strong keywording).
-    if (role === 'merchant' && detectMerchantTechnicalIntent(message)) {
-      const assetHint = requestedAsset ?? 'a patient communication draft';
-      const techReply = `I can help with patient communication, recall campaigns, offers, and your magicpin profile. I can’t audit or recommend changes to clinic equipment. Please consult your equipment supplier. Reply YES for a patient-friendly draft. ${mentionTriggerAndAsset(triggerKind, merchantCategorySlug, assetHint)}`;
-      return {
-        action: 'send',
-        body: enforceMaxChars(techReply),
-        cta: 'binary_yes_no_stop',
-        rationale: 'Merchant technical question: refused equipment advice; offered patient-facing draft.'
-      };
-    }
-
-    // Merchant YES / OK / Sounds good => deliver requested business asset (no qualification question).
     if (role === 'merchant' && detectMerchantYes(lower)) {
-      const cat = merchantCategorySlug ?? 'category';
-      const kind = triggerKind ?? 'your active update';
-
-      // If merchant explicitly asked for an “abstract”, respond with an abstract-style message.
-      if (lower.includes('abstract')) {
-        const abstractBody = `Here’s a concise abstract-style draft aligned to your ${kind} (${cat}):\n\nTitle: Patient-focused clinical update—key takeaway + action\n\n1) Background: What this addresses for patients\n2) Evidence/Insight: One-line why it matters (no overclaim)\n3) Relevance: How it connects to your offer / recall intent\n4) Next Step: Invite the patient to book / respond (low friction)\n\nWant me to tailor it for WhatsApp length or email length? (Reply STOP to pause)`;
-
-        return {
-          action: 'send',
-          body: enforceMaxChars(abstractBody),
-          cta: 'open_ended',
-          rationale: 'Merchant confirmation received; merchant requested an abstract, so returned an abstract-style draft.'
-        };
-      }
-
-      const asset = requestedAsset ?? 'a patient communication draft';
-      const merchantReply = `For ${kind} in ${cat}, here is the ${asset} you requested. Reply STOP to pause.`;
-      return {
-        action: 'send',
-        body: enforceMaxChars(merchantReply),
-        cta: 'open_ended',
-        rationale: 'Merchant confirmation received; delivered the requested asset immediately.'
-      };
+      return { action: 'send', body: enforceMaxChars(requestedPatientOrPost), cta: 'open_ended', rationale: 'Merchant confirmation received; delivered trigger-specific content immediately.' };
     }
 
-    // Merchant unrelated / off-topic.
     if (role === 'merchant' && detectOffTopic(lower)) {
-      const offBody = `I can only help with your magicpin profile, campaigns, offers, and customer engagement. I can’t assist with GST/income tax or unrelated business services. ${mentionTriggerAndAsset(triggerKind, merchantCategorySlug, requestedAsset)}`;
+      const safeTrigger = mentionTriggerAndCategory(triggerKind, merchantCategorySlug);
+      const offBody = `I can help with your magicpin profile, campaigns, offers, and customer engagement. I can’t assist with GST/income tax or unrelated business services.${safeTrigger ? ` ${safeTrigger}` : ''}`
+        .replace(/\(unknown\)/g, '')
+        .replace(/\bunknown\b/gi, '')
+        .trim();
+
       return { action: 'send', body: enforceMaxChars(offBody), cta: 'open_ended', rationale: 'Off-topic detected; refused within Vera scope.' };
     }
 
-
-    // Merchant time request.
     if (has(lower, ['later', 'busy', 'tomorrow'])) {
       return { action: 'wait', wait_seconds: 1800, rationale: 'Merchant asked for time; backing off for 30 minutes.' };
     }
 
-    // Generic continuation (fallback last).
-    const defaultMerchant = 'Got it. I can make the next step specific to your active update. Reply YES to continue, or STOP to pause.';
-    return { action: 'send', body: enforceMaxChars(defaultMerchant), cta: 'binary_yes_no_stop', rationale: 'Fallback: no specialized handler matched.' };
+    const defaultMerchant = 'Got it. I’ll tailor the next message to your current update.';
+    return { action: 'send', body: enforceMaxChars(defaultMerchant), cta: 'open_ended', rationale: 'Fallback: no specialized handler matched.' };
   }
 }
-
 
